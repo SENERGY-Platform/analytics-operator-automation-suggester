@@ -24,8 +24,6 @@ is the port. A topic naming several devices adds a `device_id` column. The topic
 
 __all__ = ("signals_from_datasets", "signals_from_frames", "service_id_of")
 
-import concurrent.futures
-import time
 import typing
 
 import numpy as np
@@ -42,25 +40,9 @@ def service_id_of(topic_name: typing.Optional[str]) -> str:
     return name.replace("_", ":") if name.startswith(SERVICE_PREFIX) else name
 
 
-# One dataset is read with this many attempts, this far apart (a Ray Data dataset is lazy: reading it again runs
-# its plan again), and at most READ_WORKERS datasets are read at once.
-READ_ATTEMPTS = 3
-RETRY_PAUSE_S = 15.0
-READ_WORKERS = 8
-
-
+# The lib reads all inputs in one task (reader="sql") and retries a table on a dropped connection itself.
 def _read_frame(ds) -> pd.DataFrame:
     return (ray.get(ds) if isinstance(ds, ray.ObjectRef) else ds).to_pandas()
-
-
-def _read_with_retry(ds) -> pd.DataFrame:
-    for attempt in range(1, READ_ATTEMPTS + 1):
-        try:
-            return _read_frame(ds)
-        except Exception:
-            if attempt == READ_ATTEMPTS:
-                raise
-            time.sleep(RETRY_PAUSE_S)
 
 
 def _device_groups(frame: pd.DataFrame, meta: dict) -> typing.List[typing.Tuple[str, pd.DataFrame]]:
@@ -116,18 +98,10 @@ def signals_from_datasets(datasets, topic_meta: typing.Sequence[dict], notes: ty
         return [], False
     failed = False
     frames = []
-
-    def read(ds):
+    for i, ds in enumerate(datasets):
         try:
-            return _read_with_retry(ds), None
+            frame = _read_frame(ds)
         except Exception as ex:
-            return None, ex
-
-    # map keeps the order of the datasets, whatever order the reads finish in.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=READ_WORKERS) as pool:
-        results = list(pool.map(read, datasets))
-    for i, (frame, ex) in enumerate(results):
-        if ex is not None:
             failed = True
             notes.append(f"history of topic {i} not readable: {type(ex).__name__}: {ex}")
             continue

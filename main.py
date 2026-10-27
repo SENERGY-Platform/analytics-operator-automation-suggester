@@ -169,7 +169,7 @@ class Operator(MLOperator):
         datasets = None
         try:
             topic_meta = _topic_meta()
-            datasets = provide_historic_data(datetime.timedelta(days=self.config.history_days))
+            datasets = provide_historic_data(datetime.timedelta(days=self.config.history_days), reader="sql", changes_only=True)
         except Exception as ex:
             logger.warning(f"history not available: {type(ex).__name__}: {ex}")
         now = clock.now()
