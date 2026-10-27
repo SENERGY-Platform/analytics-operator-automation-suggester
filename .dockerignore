@@ -1,0 +1,9 @@
+.github
+.env
+tests
+data
+**/__pycache__
+*.pickle
+git_commit
+screenshots
+.venv

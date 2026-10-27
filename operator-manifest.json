@@ -1,0 +1,92 @@
+{
+  "inputs": [
+    {
+      "name": "binary_state",
+      "type": "bool"
+    },
+    {
+      "name": "contact_state",
+      "type": "string"
+    },
+    {
+      "name": "button_press",
+      "type": "string"
+    },
+    {
+      "name": "position",
+      "type": "float"
+    },
+    {
+      "name": "target_state",
+      "type": "string"
+    },
+    {
+      "name": "target_position",
+      "type": "float"
+    },
+    {
+      "name": "target_speed",
+      "type": "float"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "suggestions",
+      "type": "string"
+    },
+    {
+      "name": "version",
+      "type": "string"
+    },
+    {
+      "name": "trained_at",
+      "type": "string"
+    }
+  ],
+  "config_values": [
+    {
+      "name": "logger_level",
+      "type": "string"
+    },
+    {
+      "name": "history_days",
+      "type": "int"
+    },
+    {
+      "name": "window_before_s",
+      "type": "int"
+    },
+    {
+      "name": "window_after_s",
+      "type": "int"
+    },
+    {
+      "name": "min_hits",
+      "type": "int"
+    },
+    {
+      "name": "min_lift",
+      "type": "float"
+    },
+    {
+      "name": "min_confidence",
+      "type": "float"
+    },
+    {
+      "name": "coupling_max_delay_s",
+      "type": "float"
+    },
+    {
+      "name": "min_median_delay_s",
+      "type": "float"
+    },
+    {
+      "name": "max_suggestions",
+      "type": "int"
+    },
+    {
+      "name": "targets",
+      "type": "string"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+data
+__pycache__
+.env
+git_commit
+*.pickle
+*.parquet
+.venv
+.vscode
+mlruns
+cache
