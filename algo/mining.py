@@ -58,6 +58,8 @@ class Params:
     min_hits: int = 10
     min_lift: float = 3.0
     min_confidence: float = 0.25
+    # A binary target that is switched off needs this much; an off is what happens anyway after most things.
+    min_confidence_off: float = 0.5
     coupling_max_delay_s: float = 2.0
     # A pair whose median signed delay of the hits is at or below this is no consequence of the trigger.
     min_median_delay_s: float = -10.0
@@ -252,7 +254,8 @@ def _rule_in_mask(trig: _Trigger, target: SignalEvents, token: str, tb: np.ndarr
     base = _hit_matrix(tb, trig.shifted[mask], p.window_before_s, p.window_after_s)
     baseline = max(float(base.mean()), 1.0 / base.size)
     lift = confidence / baseline
-    if confidence < p.min_confidence or lift < p.min_lift:
+    needed = p.min_confidence_off if target.kind == "binary" and token == "off" else p.min_confidence
+    if confidence < needed or lift < p.min_lift:
         return None
     return _Rule(trig, target, token, mask, hit_m, base, delay_m, win, days, lift, hits, hit)
 

@@ -63,6 +63,7 @@ class Config(unittest.TestCase):
             p = params_of(CustomConfig(raw))
             self.assertEqual((p.window_before_s, p.window_after_s, p.min_hits, p.min_lift, p.min_confidence),
                              (300, 600, 10, 3.0, 0.25))
+            self.assertEqual(p.min_confidence_off, 0.5)
             self.assertEqual(p.max_suggestions, 10)
             self.assertEqual((p.coupling_max_delay_s, p.min_median_delay_s, p.targets),
                              (2.0, -10.0, ()))

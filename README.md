@@ -42,11 +42,11 @@ Output, one message per new list:
 12. `auto_off_s`: median on-time of the target if 70 % of its on-cycles are shorter than 10 minutes.
 13. The best `max_suggestions` by lift times the root of the hits are kept.
 
-A suggestion needs `min_hits` hits, `min_confidence` and `min_lift`. Training reads `history_days` of history once per Europe/Berlin day and publishes a list only when its version differs from the last one. The state `published` is part of the registered model.
+A suggestion needs `min_hits` hits, `min_confidence` (`min_confidence_off` for a binary target that is switched off) and `min_lift`. Training reads `history_days` of history once per Europe/Berlin day and publishes a list only when its version differs from the last one. The state `published` is part of the registered model.
 
 ## Config
 
-`history_days` 365, `window_before_s` 300, `window_after_s` 600, `min_hits` 10, `min_lift` 3, `min_confidence` 0.25, `coupling_max_delay_s` 2, `min_median_delay_s` -10, `max_suggestions` 10, `targets` (device ids, comma separated or JSON list; empty: every device on a target port).
+`history_days` 365, `window_before_s` 300, `window_after_s` 600, `min_hits` 10, `min_lift` 3, `min_confidence` 0.25, `min_confidence_off` 0.5, `coupling_max_delay_s` 2, `min_median_delay_s` -10, `max_suggestions` 10, `targets` (device ids, comma separated or JSON list; empty: every device on a target port).
 
 ## Development
 
@@ -61,3 +61,4 @@ A suggestion needs `min_hits` hits, `min_confidence` and `min_lift`. Training re
 - The service of a series is taken from the topic name (`urn_infai_ses_service_...`, `_` read as `:`). Service ids that contain `#` are not recovered this way.
 - Rows of one series with the same time and different values are kept and decided by majority per burst (see Method 1); the platform's history reader may already have reduced them to the last one.
 - The mining is quadratic in the number of series: about 0.2 s for 10 series, 0.8 s for 20 and 2.8 s for 40 at 1500 events per series (reviewer's measurement). It runs once a day in the training task.
+- The history is read dataset by dataset with up to three attempts, 15 s apart, and eight datasets at a time. A dataset that still fails makes the whole read count as failed (the training is repeated later).

@@ -73,6 +73,10 @@
       "type": "float"
     },
     {
+      "name": "min_confidence_off",
+      "type": "float"
+    },
+    {
       "name": "coupling_max_delay_s",
       "type": "float"
     },

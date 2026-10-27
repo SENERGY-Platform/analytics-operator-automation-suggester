@@ -86,6 +86,7 @@ class CustomConfig(Config):
     min_hits: int = 10
     min_lift: float = 3.0
     min_confidence: float = 0.25
+    min_confidence_off: float = 0.5
     coupling_max_delay_s: float = 2.0
     min_median_delay_s: float = -10.0
     max_suggestions: int = 10
@@ -96,7 +97,7 @@ class CustomConfig(Config):
         super().__init__(d, **kwargs)
         cls = type(self)
         for name, cast in (("history_days", int), ("max_suggestions", int), ("window_before_s", int), ("window_after_s", int), ("min_hits", int),
-                           ("min_lift", float), ("min_confidence", float), ("coupling_max_delay_s", float), ("min_median_delay_s", float)):
+                           ("min_lift", float), ("min_confidence", float), ("min_confidence_off", float), ("coupling_max_delay_s", float), ("min_median_delay_s", float)):
             setattr(self, name, _number(getattr(self, name), getattr(cls, name), cast))
 
 
@@ -104,6 +105,7 @@ def params_of(config: CustomConfig) -> Params:
     # Not a method: simple_struct copies every public class attribute into the instance, a method included.
     return Params(window_before_s=config.window_before_s, window_after_s=config.window_after_s,
                   min_hits=config.min_hits, min_lift=config.min_lift, min_confidence=config.min_confidence,
+                  min_confidence_off=config.min_confidence_off,
                   coupling_max_delay_s=config.coupling_max_delay_s,
                   min_median_delay_s=config.min_median_delay_s,
                   max_suggestions=config.max_suggestions,

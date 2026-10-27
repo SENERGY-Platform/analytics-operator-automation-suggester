@@ -103,6 +103,7 @@ def main():
     ap.add_argument("--min-hits", type=int, default=d.min_hits)
     ap.add_argument("--min-lift", type=float, default=d.min_lift)
     ap.add_argument("--min-confidence", type=float, default=d.min_confidence)
+    ap.add_argument("--min-confidence-off", type=float, default=d.min_confidence_off)
     ap.add_argument("--coupling-max-delay-s", type=float, default=d.coupling_max_delay_s)
     ap.add_argument("--min-median-delay-s", type=float, default=d.min_median_delay_s, help="use --min-median-delay-s=-10 for negative values")
     ap.add_argument("--max-suggestions", type=int, default=d.max_suggestions)
@@ -111,7 +112,7 @@ def main():
 
     series = load_series(load_mapping(a.mapping), a.responses)
     signals = extract_all(series)
-    params = Params(a.window_before_s, a.window_after_s, a.min_hits, a.min_lift, a.min_confidence,
+    params = Params(a.window_before_s, a.window_after_s, a.min_hits, a.min_lift, a.min_confidence, a.min_confidence_off,
                     a.coupling_max_delay_s, a.min_median_delay_s, a.max_suggestions,
                     tuple(x.strip() for x in a.targets.split(",") if x.strip()))
     found = mine(signals, params)

@@ -17,6 +17,8 @@
 import json
 import unittest
 
+import numpy as np
+
 from algo import events, window
 from algo.events import Signal, debounce, extract
 from algo.mining import Params, mine
@@ -495,6 +497,39 @@ class NumericTargetPorts(unittest.TestCase):
             raw += numeric_target("target_position", 80.0, 0.0, f"dev-blind-{k}")[1:]
         raw.append(numeric_target("target_position", 80.0)[0])
         self.assertEqual(mine(extract_all(raw), Params()), [])
+
+
+def switched_off(share):
+    """The light is on for two hours; it goes off 30 s after the lamp on a random `share` of the days, else much later."""
+    follows = np.random.default_rng(3).random(syn.DAYS) < share
+    lamp, light = [], []
+    for i in range(syn.DAYS):
+        off = syn.local(i, syn.EVENING[i % len(syn.EVENING)], (i * 7) % 60)
+        lamp += [(off - 10000, True), (off, False)]
+        light += [(off - 7200, True), (off + 30 if follows[i] else off + 3000, False)]
+    return [syn.series(syn.LAMP, "binary_state", lamp), syn.series(syn.EG, "target_state", light, "value.on")]
+
+
+class OffNeedsMore(unittest.TestCase):
+    """N3: a binary target that is switched off needs min_confidence_off; the others min_confidence."""
+
+    def values(self, share, **params):
+        found = mine(extract_all(switched_off(share)), Params(**params))
+        return [(t["value"], s["stats"]["confidence"]) for s in found for t in s["targets"]]
+
+    def test_off_at_forty_percent_is_dropped(self):
+        self.assertEqual(self.values(0.4), [])
+        self.assertEqual([v for v, _ in self.values(0.4, min_confidence_off=0.25)], [False])
+
+    def test_off_at_sixty_percent_is_kept(self):
+        got = self.values(0.6)
+        self.assertEqual([v for v, _ in got], [False])
+        self.assertGreaterEqual(got[0][1], 0.5)
+
+    def test_on_targets_are_not_affected(self):
+        found = mine(extract_all(syn.evening()), Params(min_confidence_off=1.0))
+        self.assertEqual(len(found), 1)
+        self.assertEqual([t["value"] for t in found[0]["targets"]], [True, True])
 
 
 class Contract(unittest.TestCase):
