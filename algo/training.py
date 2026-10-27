@@ -27,8 +27,9 @@ from .mining import Params, mine
 from .model import AutomationModel
 
 
-def extract_all(series: typing.Sequence[typing.Tuple[Signal, typing.Sequence[float], typing.Sequence]]) -> typing.List[SignalEvents]:
-    return [extract(signal, times, values) for signal, times, values in series]
+def extract_all(series: typing.Sequence[typing.Tuple[Signal, typing.Sequence[float], typing.Sequence]],
+                power_bucket_s: float = 60.0) -> typing.List[SignalEvents]:
+    return [extract(signal, times, values, power_bucket_s) for signal, times, values in series]
 
 
 def fit_rules(datasets, topic_meta, now: datetime.datetime, params: Params, history_days: int):
@@ -38,7 +39,7 @@ def fit_rules(datasets, topic_meta, now: datetime.datetime, params: Params, hist
     """
     notes: typing.List[str] = []
     series, history_failed = signals_from_datasets(datasets, topic_meta, notes)
-    signals = extract_all(series)
+    signals = extract_all(series, params.power_bucket_s)
     rules = mine(signals, params)
     notes.append(f"{len(series)} series, {sum(len(s.events) for s in signals)} events, {len(rules)} suggestions")
     zone = params.zone()

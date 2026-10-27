@@ -28,7 +28,7 @@ import ray
 from operator_lib import util
 from operator_lib.util import MLOperator, Config, Inputs, Outputs, logger
 from operator_lib.util import clock
-from operator_lib.util.helpers import provide_historic_data
+from operator_lib.util.helpers import provide_historic_data, SqlOverride
 
 from algo.mining import Params
 from algo.model import SCHEMA_VERSION, AutomationModel, export_json
@@ -81,6 +81,9 @@ class CustomConfig(Config):
     logger_level: str = "warning"
 
     history_days: int = 365
+    # Power readings change all the time, so they are read per bucket (the maximum in it) and over a shorter time.
+    power_history_days: int = 90
+    power_bucket_s: int = 60
     window_before_s: int = 300
     window_after_s: int = 600
     min_hits: int = 10
@@ -96,9 +99,13 @@ class CustomConfig(Config):
     def __init__(self, d, **kwargs):
         super().__init__(d, **kwargs)
         cls = type(self)
-        for name, cast in (("history_days", int), ("max_suggestions", int), ("window_before_s", int), ("window_after_s", int), ("min_hits", int),
+        for name, cast in (("history_days", int), ("power_history_days", int), ("power_bucket_s", int), ("max_suggestions", int), ("window_before_s", int), ("window_after_s", int), ("min_hits", int),
                            ("min_lift", float), ("min_confidence", float), ("min_confidence_off", float), ("coupling_max_delay_s", float), ("min_median_delay_s", float)):
             setattr(self, name, _number(getattr(self, name), getattr(cls, name), cast))
+        for name in ("power_history_days", "power_bucket_s"):
+            if getattr(self, name) < 1:
+                logger.warning(f"{name} {getattr(self, name)} is below 1, using {getattr(cls, name)}")
+                setattr(self, name, getattr(cls, name))
 
 
 def params_of(config: CustomConfig) -> Params:
@@ -108,7 +115,7 @@ def params_of(config: CustomConfig) -> Params:
                   min_confidence_off=config.min_confidence_off,
                   coupling_max_delay_s=config.coupling_max_delay_s,
                   min_median_delay_s=config.min_median_delay_s,
-                  max_suggestions=config.max_suggestions,
+                  max_suggestions=config.max_suggestions, power_bucket_s=config.power_bucket_s,
                   targets=_device_list(config.targets))
 
 
@@ -121,6 +128,8 @@ class OperatorInputs(Inputs):
     target_state: str
     target_position: float
     target_speed: float
+    # The consumption of a device in W; a trigger only, read as "on" or "off" against thresholds learned from the history.
+    power: float
 
 
 class OperatorOutputs(Outputs):
@@ -147,6 +156,14 @@ def _topic_meta() -> typing.List[dict]:
              "mappings": [{"dest": m.dest, "source": m.source} for m in t.mappings]} for t in topics]
 
 
+def power_overrides(config: CustomConfig, topic_meta: typing.Sequence[dict]) -> typing.Optional[typing.Dict[str, SqlOverride]]:
+    """The window and bucket for the input `power`; none when no topic maps it, as with an instance that predates it."""
+    if not any(m["dest"] == "power" for t in topic_meta for m in t["mappings"]):
+        return None
+    days, bucket = config.power_history_days, config.power_bucket_s
+    return {"power": SqlOverride(duration=datetime.timedelta(days=days), bucket=datetime.timedelta(seconds=bucket))}
+
+
 def _berlin_date(t: datetime.datetime) -> datetime.date:
     t = t.replace(tzinfo=UTC) if t.tzinfo is None else t
     return t.astimezone(BERLIN).date()
@@ -169,7 +186,8 @@ class Operator(MLOperator):
         datasets = None
         try:
             topic_meta = _topic_meta()
-            datasets = provide_historic_data(datetime.timedelta(days=self.config.history_days), reader="sql", changes_only=True)
+            datasets = provide_historic_data(datetime.timedelta(days=self.config.history_days), reader="sql", changes_only=True,
+                                             overrides=power_overrides(self.config, topic_meta))
         except Exception as ex:
             logger.warning(f"history not available: {type(ex).__name__}: {ex}")
         now = clock.now()

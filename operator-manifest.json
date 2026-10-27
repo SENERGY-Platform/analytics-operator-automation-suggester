@@ -27,6 +27,10 @@
     {
       "name": "target_speed",
       "type": "float"
+    },
+    {
+      "name": "power",
+      "type": "float"
     }
   ],
   "outputs": [
@@ -50,6 +54,14 @@
     },
     {
       "name": "history_days",
+      "type": "int"
+    },
+    {
+      "name": "power_history_days",
+      "type": "int"
+    },
+    {
+      "name": "power_bucket_s",
       "type": "int"
     },
     {

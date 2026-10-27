@@ -49,6 +49,8 @@ GROUP_S = 60.0
 # R3: trigger series whose events fall together within CLUSTER_S in CLUSTER_SHARE of the cases are one source.
 CLUSTER_S = 2.0
 CLUSTER_SHARE = 0.8
+# A power event this much beyond the bucket of a binary_state change of the same device is the same switching.
+POWER_SWITCH_EXTRA_S = 60.0
 
 
 @dataclasses.dataclass
@@ -66,6 +68,9 @@ class Params:
     max_suggestions: int = 10
     # Device ids that count as controllable; empty means every device on the target port.
     targets: typing.Tuple[str, ...] = ()
+    # The bucket the power history is read in: a power event is timed to within this, and one that lies this close
+    # (plus POWER_SWITCH_EXTRA_S) to a switching of the same device is that switching.
+    power_bucket_s: float = 60.0
 
     def zone(self) -> zoneinfo.ZoneInfo:
         return zoneinfo.ZoneInfo(DEFAULT_TZ)
@@ -80,11 +85,15 @@ def rule_key(trigger: dict, win: dict, target_tokens: typing.Iterable[typing.Seq
     Trigger, window and the set of targets with their value. Numbers like the hit count are not part of it,
     or the list would be new every day.
     """
-    return json.dumps({
+    key = {
         "t": [trigger["device_id"], trigger["service_id"], trigger["path"], trigger["kind"], trigger["from"], trigger["to"]],
         "w": [win["from"], win["to"], list(win["weekdays"])],
         "g": sorted(list(t) for t in target_tokens),
-    }, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    }
+    if trigger["kind"] == "power":
+        # A changed threshold is another rule; the key of every other kind stays as it was.
+        key["p"] = [trigger["on_above_w"], trigger["off_below_w"], trigger["hold_s"]]
+    return json.dumps(key, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def suggestion_id(key: str) -> str:
@@ -191,16 +200,21 @@ def _hit_matrix(tb: np.ndarray, shifted: np.ndarray, before: float, after: float
     return hit.reshape(shifted.shape)
 
 
-def _is_coupling(hit: np.ndarray, delay: np.ndarray, p: Params) -> bool:
+def _coupling_limit(trigger: SignalEvents, p: Params) -> float:
+    """R9: how close B must be to A to count as switched by it; a power event is only known to within its bucket."""
+    return p.power_bucket_s if trigger.kind == "power" else p.coupling_max_delay_s
+
+
+def _is_coupling(hit: np.ndarray, delay: np.ndarray, limit: float) -> bool:
     """B switches within moments of A: an existing coupling, nothing to suggest."""
     if hit.sum() == 0:
         return False
-    return float(np.median(np.abs(delay[hit]))) <= p.coupling_max_delay_s
+    return float(np.median(np.abs(delay[hit]))) <= limit
 
 
 def _trigger_fields(se: SignalEvents, token: str) -> typing.Tuple[typing.Optional[str], str]:
     """(from, to) of the trigger. A press or a movement has no previous state."""
-    if se.kind == "binary":
+    if se.kind in ("binary", "power"):
         return ("on" if token == "off" else "off"), token
     if se.kind == "contact":
         return ("open" if token == "closed" else "closed"), token
@@ -246,7 +260,7 @@ def _rule_in_mask(trig: _Trigger, target: SignalEvents, token: str, tb: np.ndarr
     n = int(mask.sum())
     hit_m, delay_m = hit[mask], delay[mask]
     hits = int(hit_m.sum())
-    if n == 0 or hits < p.min_hits or _is_coupling(hit_m, delay_m, p):
+    if n == 0 or hits < p.min_hits or _is_coupling(hit_m, delay_m, _coupling_limit(trig.events, p)):
         return None
     if float(np.median(delay_m[hit_m])) <= p.min_median_delay_s:
         return None  # R10: a target that mostly switches before the trigger is no consequence of it
@@ -405,6 +419,8 @@ def _suggestion(group: typing.List[_Rule], p: Params) -> dict:
     kind_from, kind_to = _trigger_fields(se, trig.token)
     trigger = {"device_id": se.signal.device_id, "service_id": se.signal.service_id, "path": se.signal.path,
                "kind": se.kind, "from": kind_from, "to": kind_to}
+    if se.kind == "power":
+        trigger.update(on_above_w=se.power.on_above_w, off_below_w=se.power.off_below_w, hold_s=se.power.hold_s)
     win = {"from": window.format_hour(start), "to": window.format_hour(start + length),
            "weekdays": list(first.weekdays), "tz": DEFAULT_TZ}
     group = sorted(group, key=lambda r: (r.target.signal.key, r.token))
@@ -463,6 +479,26 @@ def _one_direction(entries: typing.List[typing.Tuple[_Trigger, typing.List[_Rule
     return out
 
 
+def _drop_power_at_switching(signals: typing.List[SignalEvents], p: Params) -> typing.List[SignalEvents]:
+    """
+    A power event close to a binary_state change of the same device is that device being switched, which the binary
+    trigger covers. The marks are the changes of the device's binary_state series, whatever they were.
+    """
+    marks: typing.Dict[str, typing.List[float]] = {}
+    for se in signals:
+        if se.signal.port == "binary_state":
+            marks.setdefault(se.signal.device_id, []).extend(t for t, _ in se.events)
+    within = p.power_bucket_s + POWER_SWITCH_EXTRA_S
+    out = []
+    for se in signals:
+        if se.kind != "power" or not se.events or not marks.get(se.signal.device_id):
+            out.append(se)
+            continue
+        near = _near_any(np.array([t for t, _ in se.events]), np.sort(np.array(marks[se.signal.device_id])), within)
+        out.append(dataclasses.replace(se, events=[e for e, d in zip(se.events, near) if not d]))
+    return out
+
+
 def _drop_self_stated_buttons(signals: typing.List[SignalEvents]) -> typing.List[SignalEvents]:
     """R7: a button of a device that reports its own state or position only repeats what that state says."""
     stated = {se.signal.device_id for se in signals if se.signal.port in STATE_PORTS}
@@ -475,6 +511,7 @@ def mine(signals: typing.Sequence[SignalEvents], p: Params) -> typing.List[dict]
     zone = p.zone()
     signals = [se for se in signals
                if not is_target(se.signal.port) or not controllable or se.signal.device_id in controllable]
+    signals = _drop_power_at_switching(list(signals), p)
     signals = _drop_self_stated_buttons(signals)
     signals = _drop_group_actions(list(signals))
     target_devices = {se.signal.device_id for se in signals if is_target(se.signal.port)}
@@ -503,7 +540,7 @@ def mine(signals: typing.Sequence[SignalEvents], p: Params) -> typing.List[dict]
             if device == sig.device_id or device in own_cluster:
                 continue
             hit, delay = _hit(tb, trig.times, p.window_before_s, p.window_after_s)
-            if hit.sum() < p.min_hits or _is_coupling(hit, delay, p):
+            if hit.sum() < p.min_hits or _is_coupling(hit, delay, _coupling_limit(trig.events, p)):
                 continue
             cands.append((target, token, tb, hit, delay))
         # Each pair in the hours it occurs in; their hits tell where the trigger has hits at all.

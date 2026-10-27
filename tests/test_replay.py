@@ -15,12 +15,15 @@
 """
 
 import datetime
+import importlib.util
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+
+import numpy as np
 
 from tests import synthetic as syn
 
@@ -51,6 +54,44 @@ class Replay(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertEqual((found[0]["window"]["from"], found[0]["window"]["to"]), ("19:00", "02:00"))
         self.assertEqual(len(found[0]["targets"]), 2)
+
+
+def load_script():
+    spec = importlib.util.spec_from_file_location("replay_history", os.path.join(ROOT, "scripts", "replay_history.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class PowerReplay(unittest.TestCase):
+    def test_buckets_take_the_maximum_and_changes_only_keeps_the_edges(self):
+        replay = load_script()
+        times, maxima = replay.bucket_max([0, 10, 59, 60, 119, 130], [1, 5, 2, "x", 7, 3], 60)
+        self.assertEqual((times.tolist(), maxima.tolist()), ([0.0, 60.0, 120.0], [5.0, 7.0, 3.0]))
+        t, v = replay.changes_only(np.arange(7.0), np.array([1, 1, 1, 2, 2, 2, 2.0]))
+        self.assertEqual((t.tolist(), v.tolist()), ([0.0, 2.0, 3.0, 6.0], [1.0, 1.0, 2.0, 2.0]))
+
+    def test_offline_replay_reads_power_as_the_operator_does(self):
+        times, values = syn.tv_power(days=30)
+        data = []
+        for t, v in zip(times, values):
+            # two readings per bucket; the bucket holds the larger one
+            data += [[iso(t + 3), v * 0.5], [iso(t + 31), v]]
+        element = {"deviceId": "dev-tv", "serviceId": syn.SVC, "data": [data]}
+        mapping = [{"device_id": "dev-tv", "service_id": syn.SVC, "path": syn.POWER_PATH, "port": "power"}]
+        with tempfile.TemporaryDirectory() as d:
+            m, r = os.path.join(d, "mapping.json"), os.path.join(d, "r.json")
+            for path, body in ((m, mapping), (r, [element])):
+                with open(path, "w") as f:
+                    json.dump(body, f)
+            out = subprocess.run([sys.executable, "-I", os.path.join(ROOT, "scripts", "replay_history.py"), m, r, "--json"],
+                                 capture_output=True, text=True, cwd=d, check=True)
+            short = subprocess.run([sys.executable, "-I", os.path.join(ROOT, "scripts", "replay_history.py"), m, r,
+                                    "--power-history-days", "10", "--json"], capture_output=True, text=True, cwd=d, check=True)
+        self.assertEqual(json.loads(out.stdout), [])
+        self.assertIn("suitable, on above 10 W, off below 5 W", out.stderr)
+        self.assertIn(", 30 switch-ons", out.stderr)
+        self.assertIn(", 10 switch-ons", short.stderr)
 
 
 if __name__ == "__main__":

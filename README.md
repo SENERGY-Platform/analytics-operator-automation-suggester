@@ -12,6 +12,7 @@ One input per kind of series, so a value is read by its port and not guessed:
 | `contact_state` | trigger: open/closed |
 | `button_press` | trigger: the action text of a press |
 | `position` | trigger: movement up or down in steps of 0.1 |
+| `power` | trigger: a device that measures its consumption (W) switches on or off, see Power |
 | `target_state` | target: on/off state of devices that can be controlled (on/off, true/false, 1/0, any case); other values are no events |
 | `target_position` | target: position of a controllable device, fraction or percent, in 10 levels |
 | `target_speed` | target: speed of a controllable device, in 10 levels |
@@ -44,16 +45,38 @@ Output, one message per new list:
 
 A suggestion needs `min_hits` hits, `min_confidence` (`min_confidence_off` for a binary target that is switched off) and `min_lift`. Training reads `history_days` of history once per Europe/Berlin day and publishes a list only when its version differs from the last one. The state `published` is part of the registered model.
 
+## Power
+
+A device with a power reading is a trigger ("TV on", "TV off"). The history of `power` is read over `power_history_days` in buckets of `power_bucket_s` seconds (the maximum per bucket, then unchanged consecutive buckets left out), because power changes all the time and a day-long history of raw readings would be too much.
+
+Per device the operator learns what "on" means from that history:
+
+1. Each reading holds its value until the next one; all statistics weigh a row by that time, since the rows are far apart where a device stands still.
+2. The log of the power (`log10(max(P, 0) + 0.1)`) is split in a low and a high class (Otsu). `low_hi` is the 95th percentile of the low class, `high_lo` the 5th percentile of the high class.
+3. `on_above_w` is `sqrt(max(low_hi, 1) * high_lo)` rounded to the 1-2-5 series, `off_below_w` is half of it (so 2.5, 25, ... follow from 5, 50, ...). On is power above `on_above_w`, off is power below `off_below_w`; in between the previous state holds.
+4. The device is a trigger only if `low_hi < off_below_w`, `high_lo > on_above_w`, the classes are at least 5 W apart and the device is on between 0.5 % and 95 % of the time. A device that never switches off (a base load) or hardly ever draws power is not.
+5. A change counts when the new state stands longer than 60 s plus one bucket: the maximum per bucket stretches a short spike to one or two buckets, so a state counts only when it is longer than the hold and the bucket. The same holds for an off inside an on, so the history counts what the process, holding `hold_s`, would switch on. A row weighs at most a day, so weeks offline with the last value standing do not decide the levels. The event is at the start of the first bucket in the new state.
+6. A device that switches on more than 12 times a day, or at least 3 times a day at regular intervals (coefficient of variation of the gaps below 0.3), is a thermostat and gives no events.
+7. A power event within `power_bucket_s` + 60 s of a `binary_state` change of the same device is that device being switched; the binary trigger covers it and the power event is dropped.
+8. A target that follows a power trigger within `power_bucket_s` is a coupling (rule 8 of Method uses `power_bucket_s` instead of `coupling_max_delay_s`).
+
+Power is never a target. The trigger in the export carries its numbers, and they are part of the suggestion's id:
+
+    {"device_id": "...", "service_id": "...", "path": "value.sensor.ENERGY.Power", "kind": "power",
+     "from": "off", "to": "on", "on_above_w": 10, "off_below_w": 5, "hold_s": 120}
+
+The consumer applies the thresholds as given: on above `on_above_w`, off below `off_below_w`, a change counts after `hold_s` seconds without a relapse. `hold_s` is 60 s plus one bucket, the span after which the history counts a change, so the process does not react to the short spikes the training left out.
+
 ## Config
 
-`history_days` 365, `window_before_s` 300, `window_after_s` 600, `min_hits` 10, `min_lift` 3, `min_confidence` 0.25, `min_confidence_off` 0.5, `coupling_max_delay_s` 2, `min_median_delay_s` -10, `max_suggestions` 10, `targets` (device ids, comma separated or JSON list; empty: every device on a target port).
+`history_days` 365, `power_history_days` 90, `power_bucket_s` 60, `window_before_s` 300, `window_after_s` 600, `min_hits` 10, `min_lift` 3, `min_confidence` 0.25, `min_confidence_off` 0.5, `coupling_max_delay_s` 2, `min_median_delay_s` -10, `max_suggestions` 10, `targets` (device ids, comma separated or JSON list; empty: every device on a target port).
 
 ## Development
 
     uv run --frozen python -m unittest discover -s tests -t .
     uv run --frozen python -m operator_lib manifest main.py
 
-`scripts/replay_history.py` runs the same mining on local responses of `/db/v3/queries/v2`, without network. Test data is synthetic.
+`scripts/replay_history.py` runs the same mining on local responses of `/db/v3/queries/v2`, without network. Test data is synthetic. A `power` series in the mapping is read as the operator reads it (window, bucket maximum, `changes_only`), and its thresholds and verdict are printed to stderr.
 
 ## Notes
 

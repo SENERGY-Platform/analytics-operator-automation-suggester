@@ -104,3 +104,42 @@ def datasets_of(raw):
         meta.append({"name": s.service_id.replace(":", "_"), "filterType": "DeviceId", "filterValue": s.device_id,
                      "mappings": [{"dest": s.port, "source": s.path}]})
     return sets, meta
+
+
+POWER_PATH = "value.sensor.ENERGY.Power"
+MINUTE = 60.0
+
+
+def as_power(raw, on_w=60.0, off_w=1.0, delay_s=0.0, device=None):
+    """A binary series as the power of a plug: on_w while it is on, off_w while it is off, delay_s later."""
+    s, times, values = raw
+    return (Signal(device or s.device_id, s.service_id, POWER_PATH, "power"), [t + delay_s for t in times],
+            [on_w if v else off_w for v in values])
+
+
+def thin(times, values):
+    """What `changes_only` leaves of a series: the rows that differ from a neighbour, and the first and the last."""
+    n = len(values)
+    keep = [i for i in range(n) if i in (0, n - 1) or values[i] != values[i - 1] or values[i] != values[i + 1]]
+    return [times[i] for i in keep], [values[i] for i in keep]
+
+
+def tv_power(days=60, seed=7, wake_buckets=0, dips=2):
+    """
+    A TV plug read in minute buckets (the maximum per bucket): 1 W in standby; one evening session a day, 2 to 4 hours
+    long from 18:30 to 21:30, at 80 to 160 W with `dips` single minutes of standby in it; and, if wake_buckets,
+    a spike of 105 W of that many buckets once a day between 01:00 and 16:00.
+    """
+    rs = np.random.RandomState(seed)
+    base = local(0, 0)
+    values = np.full(days * 1440 + 300, 1.0)  # the last session may run past midnight
+    for d in range(days):
+        start = d * 1440 + 18 * 60 + 30 + int(rs.randint(0, 180))
+        length = int(rs.randint(120, 240))
+        values[start:start + length] = rs.uniform(80, 160, length)
+        for j in range(dips):  # apart, so that no two make a gap of two minutes
+            values[start + 5 + 20 * j + int(rs.randint(0, 10))] = 1.0
+        minute = int(rs.randint(60, 16 * 60))  # at no fixed time, or it would look like a timer
+        values[d * 1440 + minute:d * 1440 + minute + wake_buckets] = 105.0
+    times = [base + i * MINUTE for i in range(len(values))]
+    return times, values.tolist()

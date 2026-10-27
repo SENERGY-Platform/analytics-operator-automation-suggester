@@ -22,6 +22,7 @@ from unittest import mock
 import pandas as pd
 
 import main
+from operator_lib.util.helpers import SqlOverride
 from main import CustomConfig, Operator, params_of
 from algo.model import AutomationModel
 from algo.training import fit_rules
@@ -74,6 +75,57 @@ class Config(unittest.TestCase):
         self.assertEqual((c.min_hits, c.min_lift, c.history_days, params_of(c).targets), (7, 2.5, 30, ("a", "b")))
         self.assertEqual(params_of(CustomConfig({"targets": '["x","y"]'})).targets, ("x", "y"))
         self.assertEqual(CustomConfig({"min_hits": "many"}).min_hits, 10)
+
+
+class PowerInput(unittest.TestCase):
+    def test_config_defaults_and_values(self):
+        c = CustomConfig({})
+        self.assertEqual((c.power_history_days, c.power_bucket_s, params_of(c).power_bucket_s), (90, 60, 60))
+        c = CustomConfig({"power_history_days": "30", "power_bucket_s": "120"})
+        self.assertEqual((c.power_history_days, params_of(c).power_bucket_s), (30, 120))
+
+    def test_values_below_one_fall_back_to_the_defaults(self):
+        with mock.patch("main.logger"):
+            c = CustomConfig({"power_history_days": "0", "power_bucket_s": "-5"})
+        self.assertEqual((c.power_history_days, c.power_bucket_s), (90, 60))
+
+    @staticmethod
+    def train_with(raw, config=None):
+        op = make_op(**(config or {}))
+        sets, meta = syn.datasets_of(raw)
+        provide = mock.Mock(return_value=sets)
+        remote = mock.Mock(side_effect=lambda *a: fit_rules(*a))
+        with mock.patch("main.provide_historic_data", provide), mock.patch("main._topic_meta", return_value=meta), \
+                mock.patch("main.train_rules", mock.Mock(remote=remote)), mock.patch("main.ray.get", side_effect=lambda r: r), \
+                mock.patch.object(main.clock, "now", return_value=NOW):
+            model = op.train(None, None)
+        return model, provide
+
+    def test_the_history_of_power_is_read_per_bucket_over_its_own_days(self):
+        _, provide = self.train_with([syn.as_power(syn.evening()[0])])
+        args, kwargs = provide.call_args
+        self.assertEqual(args, (datetime.timedelta(days=365),))
+        self.assertEqual((kwargs["reader"], kwargs["changes_only"]), ("sql", True))
+        self.assertEqual(kwargs["overrides"], {"power": SqlOverride(duration=datetime.timedelta(days=90),
+                                                                    bucket=datetime.timedelta(seconds=60))})
+        _, provide = self.train_with([syn.as_power(syn.evening()[0])], {"power_history_days": "30", "power_bucket_s": "120"})
+        self.assertEqual(provide.call_args.kwargs["overrides"]["power"],
+                         SqlOverride(duration=datetime.timedelta(days=30), bucket=datetime.timedelta(seconds=120)))
+
+    def test_without_a_power_input_there_is_no_override(self):
+        _, provide = self.train_with(syn.evening())
+        self.assertIsNone(provide.call_args.kwargs["overrides"])
+
+    def test_power_triggers_are_trained_once(self):
+        lamp, eg, og = syn.evening()
+        eg, og = ((s_, [t + 90.0 for t in ts], vs) for s_, ts, vs in (eg, og))
+        raw = [syn.as_power(lamp), eg, og]
+        op = make_op()
+        first = run_train(op, None, raw)
+        self.assertEqual([r["trigger"]["kind"] for r in first.rules], ["power"])
+        self.assertEqual(first.rules[0]["trigger"]["on_above_w"], 10)
+        self.assertIsNone(run_train(op, FakePyFuncModel(first), raw, NOW + datetime.timedelta(days=1)))
+        self.assertEqual(json.loads(main.export_json(first))["suggestions"][0]["trigger"]["hold_s"], 120)
 
 
 class Training(unittest.TestCase):

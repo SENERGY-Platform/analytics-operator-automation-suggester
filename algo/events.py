@@ -31,7 +31,11 @@ import typing
 
 import numpy as np
 
-TRIGGER_PORTS = ("binary_state", "contact_state", "button_press", "position")
+from .power import PowerSpec, analyze as analyze_power
+
+# `power` is a trigger only: the state "on" or "off" of a device that measures its consumption, with thresholds
+# learned from the history (algo/power.py).
+TRIGGER_PORTS = ("binary_state", "contact_state", "button_press", "position", "power")
 TARGET_PORT = "target_state"
 # Always numeric, one input each because the engine ANDs the criteria of a port: a position (fraction or percent)
 # and a speed of a controllable device.
@@ -75,10 +79,12 @@ class Signal:
 @dataclasses.dataclass
 class SignalEvents:
     signal: Signal
-    kind: str  # "binary", "contact", "button", "position" or, for the target port, "binary", "text", "level"
+    kind: str  # "binary", "contact", "button", "position", "power" or, for the target port, "binary", "text", "level"
     events: typing.List[typing.Tuple[float, str]]
     # Level kind only: the median raw value of each level, which is what an action sets.
     level_values: typing.Dict[str, float] = dataclasses.field(default_factory=dict)
+    # Power kind only: the thresholds the events were read with.
+    power: typing.Optional[PowerSpec] = None
 
 
 def _text(value) -> str:
@@ -236,8 +242,14 @@ def _level_events(signal, numbers) -> SignalEvents:
     return SignalEvents(signal, "level", events, medians)
 
 
-def extract(signal: Signal, times: typing.Sequence[float], values: typing.Sequence) -> SignalEvents:
-    """The events of one series, read by the signal's port. times ascending."""
+def _power_events(signal, times, values, bucket_s: float) -> SignalEvents:
+    """A device that is no clear on/off device, or cycles, has no events and no thresholds."""
+    result = analyze_power(times, values, bucket_s)
+    return SignalEvents(signal, "power", result.events, power=result.spec if result.suitable else None)
+
+
+def extract(signal: Signal, times: typing.Sequence[float], values: typing.Sequence, power_bucket_s: float = 60.0) -> SignalEvents:
+    """The events of one series, read by the signal's port. times ascending; power_bucket_s is the bucket of `power`."""
     if signal.port == "binary_state":
         return _state_events(signal, times, values, _norm_binary, "binary")
     if signal.port == "contact_state":
@@ -246,6 +258,8 @@ def extract(signal: Signal, times: typing.Sequence[float], values: typing.Sequen
         return _button_events(signal, times, values)
     if signal.port == "position":
         return _position_events(signal, times, values)
+    if signal.port == "power":
+        return _power_events(signal, times, values, power_bucket_s)
     if signal.port == TARGET_PORT:
         return _target_events(signal, times, values)
     if signal.port in NUMERIC_TARGET_PORTS:
