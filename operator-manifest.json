@@ -45,6 +45,10 @@
     {
       "name": "trained_at",
       "type": "string"
+    },
+    {
+      "name": "new_count",
+      "type": "int"
     }
   ],
   "config_values": [

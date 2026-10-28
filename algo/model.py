@@ -33,16 +33,37 @@ class AutomationModel(mlflow.pyfunc.PythonModel):
     """
 
     def __init__(self, rules: typing.List[dict], trained_at: str, history: typing.Dict[str, str],
-                 published: bool = False, schema_version: int = SCHEMA_VERSION):
+                 published: bool = False, schema_version: int = SCHEMA_VERSION,
+                 seen_ids: typing.Optional[typing.Set[str]] = None):
         self.schema_version = schema_version
         self.rules = rules
         self.version = list_version(r["id"] for r in rules)
         self.trained_at = trained_at
         self.history = history
         self.published = published
+        # The ids of all lists emitted before this one; None while this is the first list of the model.
+        self.seen_ids = seen_ids
+
+    @property
+    def ids(self) -> typing.Set[str]:
+        return {r["id"] for r in self.rules}
+
+    @property
+    def new_count(self) -> int:
+        """How many ids of this list were in no list emitted before; 0 for the first list."""
+        seen = getattr(self, "seen_ids", None)  # a model stored before the field existed has none
+        return 0 if seen is None else len(self.ids - seen)
+
+    def successor(self, rules: typing.List[dict], trained_at: str, history: typing.Dict[str, str]) -> "AutomationModel":
+        """The next list. Only a list that was emitted counts as seen: an unpublished one was replaced unseen."""
+        seen = getattr(self, "seen_ids", None)
+        if self.published:
+            seen = (seen or set()) | self.ids
+        return AutomationModel(rules, trained_at, history, seen_ids=seen)
 
     def as_published(self) -> "AutomationModel":
-        return AutomationModel(self.rules, self.trained_at, self.history, True, self.schema_version)
+        return AutomationModel(self.rules, self.trained_at, self.history, True, self.schema_version,
+                               getattr(self, "seen_ids", None))
 
     # No type hints: mlflow checks them only where present, and the model is never called through predict.
     def predict(self, context, model_input, params=None):

@@ -190,7 +190,7 @@ class Output(unittest.TestCase):
     def test_infer_emits_exactly_once_and_returns_a_published_model(self):
         ts, result, new_model = self.op.infer(FakePyFuncModel(self.model), {}, "binary_state", "dev", self.ts)
         self.assertEqual(ts, NOW)
-        self.assertEqual(set(result), {"suggestions", "version", "trained_at"})
+        self.assertEqual(set(result), {"suggestions", "version", "trained_at", "new_count"})
         self.assertEqual(result["version"], self.model.version)
         self.assertEqual(result["trained_at"], self.model.trained_at)
         self.assertIsInstance(new_model, AutomationModel)
@@ -258,3 +258,63 @@ class History(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _rules(*ids):
+    return [{"id": i} for i in ids]
+
+
+class NewCount(unittest.TestCase):
+    """The ids of a list that no earlier emitted list held; the notification hangs on it."""
+
+    def emit(self, model):
+        return model.as_published()
+
+    def follow(self, previous, *ids):
+        return previous.successor(_rules(*ids), "t", {})
+
+    def test_first_list_counts_zero(self):
+        first = AutomationModel(_rules("a", "b"), "t", {})
+        self.assertEqual(first.new_count, 0)
+        self.assertEqual(self.emit(first).new_count, 0)
+
+    def test_two_new_ids(self):
+        second = self.follow(self.emit(AutomationModel(_rules("a", "b"), "t", {})), "a", "b", "c", "d")
+        self.assertEqual(second.new_count, 2)
+
+    def test_removed_ids_count_zero(self):
+        second = self.follow(self.emit(AutomationModel(_rules("a", "b"), "t", {})), "a")
+        self.assertEqual(second.new_count, 0)
+
+    def test_an_id_that_returns_does_not_count(self):
+        second = self.emit(self.follow(self.emit(AutomationModel(_rules("a", "b"), "t", {})), "a"))
+        third = self.follow(second, "a", "b")
+        self.assertEqual(third.new_count, 0)
+
+    def test_model_without_the_field_uses_the_ids_of_the_previous(self):
+        old = self.emit(AutomationModel(_rules("a"), "t", {}))
+        del old.seen_ids
+        self.assertEqual(old.new_count, 0)
+        self.assertEqual(self.follow(old, "a", "b").new_count, 1)
+
+    def test_a_list_replaced_before_it_was_emitted_is_not_seen(self):
+        first = AutomationModel(_rules("a"), "t", {})
+        second = self.follow(first, "a", "b")
+        self.assertIsNone(second.seen_ids)
+        self.assertEqual(second.new_count, 0)
+        self.assertEqual(self.follow(self.emit(second), "a", "b", "c").new_count, 1)
+
+    def test_publishing_keeps_the_seen_ids(self):
+        second = self.follow(self.emit(AutomationModel(_rules("a"), "t", {})), "a", "b")
+        self.assertEqual(self.emit(second).new_count, 1)
+
+    def test_train_and_infer_end_to_end(self):
+        op = make_op()
+        first = run_train(op, None, syn.evening())
+        with mock.patch.object(main.clock, "now", return_value=NOW):
+            _, out, published = op.infer(FakePyFuncModel(first), {}, "binary_state", "dev", NOW)
+            self.assertEqual(out["new_count"], 0)
+            second = run_train(op, FakePyFuncModel(published), syn.evening()[:2])
+            self.assertEqual(second.seen_ids, first.ids)
+            _, out, _ = op.infer(FakePyFuncModel(second), {}, "binary_state", "dev", NOW)
+        self.assertEqual(out["new_count"], 1)  # with the second light left out, another rule (a new id) results

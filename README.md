@@ -24,6 +24,7 @@ Output, one message per new list:
 | `suggestions` | JSON: `version`, `trained_at`, `history`, and `suggestions` with trigger, window, targets, `auto_off_s` and `stats` |
 | `version` | hash over the suggestions' ids; statistics are not part of it |
 | `trained_at` | UTC time of the training |
+| `new_count` | number of ids in the list that were in no list emitted before; 0 for the first list of a model |
 
 `function_id` of a target is `null`: the operator knows paths, not control functions. The consumer resolves the function from the device type.
 

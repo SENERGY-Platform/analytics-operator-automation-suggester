@@ -136,6 +136,7 @@ class OperatorOutputs(Outputs):
     suggestions: str
     version: str
     trained_at: str
+    new_count: int
 
 
 def _unwrap(model) -> typing.Optional[AutomationModel]:
@@ -228,6 +229,8 @@ class Operator(MLOperator):
                 logger.exception("could not log the training metrics")
         if previous is not None and previous.version == trained.version:
             return None
+        if previous is not None:
+            trained = previous.successor(trained.rules, trained.trained_at, trained.history)
         return trained
 
     def need_retraining(self, model) -> bool:
@@ -242,7 +245,8 @@ class Operator(MLOperator):
         current = _unwrap(model)
         if current is None or current.published:
             return now, None, None
-        result = {"suggestions": export_json(current), "version": current.version, "trained_at": current.trained_at}
+        result = {"suggestions": export_json(current), "version": current.version, "trained_at": current.trained_at,
+                  "new_count": current.new_count}
         return now, result, current.as_published()
 
 
