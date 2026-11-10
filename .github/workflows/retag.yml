@@ -39,6 +39,5 @@ jobs:
         run: |
           image=ghcr.io/senergy-platform/automation-suggester-operator
           if [[ "$SOURCE" == sha256:* ]]; then src="$image@$SOURCE"; else src="$image:$SOURCE"; fi
-          # --prefer-index=false keeps a single-platform build at its own digest
-          docker buildx imagetools create --prefer-index=false -t "$image:$TARGET" "$src"
+          docker buildx imagetools create -t "$image:$TARGET" "$src"
           docker buildx imagetools inspect "$image:$TARGET"
